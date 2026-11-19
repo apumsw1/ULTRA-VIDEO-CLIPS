@@ -1,9 +1,29 @@
-
 name = "ultra-video-clips-api"
 main = "src/index.ts"
 compatibility_date = "2026-11-19"
-
 workers_dev = true
 
 [observability]
 enabled = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ultra-video-clips-db"
+database_id = "YOUR_D1_DATABASE_ID"
+
+[[r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "ultra-video-clips-media"
+
+[[queues.producers]]
+binding = "MEDIA_QUEUE"
+queue = "ultra-video-clips-jobs"
+
+[[queues.consumers]]
+queue = "ultra-video-clips-jobs"
+max_batch_size = 5
+max_batch_timeout = 5
+max_retries = 2
+
+[vars]
+PUBLIC_API_BASE = "https://ultra-video-clips-api.ultraloader.workers.dev"
