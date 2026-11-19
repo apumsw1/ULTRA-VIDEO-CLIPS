@@ -1,6 +1,8 @@
 package com.ultravideoclips
 
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -449,7 +451,7 @@ fun UltraVideoClipsApp() {
                                     val result =
                                         inspectVideoUrl(cleanUrl)
 
-                                    runOnUiThread {
+                                    Handler(Looper.getMainLooper()).post {
                                         isInspecting = false
                                         inspection = result
 
