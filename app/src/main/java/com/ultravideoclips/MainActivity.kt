@@ -1,10 +1,12 @@
 package com.ultravideoclips
 
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
+import android.webkit.WebChromeClient
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -20,6 +22,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -39,6 +42,12 @@ private val MutedText = Color(0xFF9BAAC0)
 data class InspectionResult(
     val success: Boolean,
     val message: String,
+    val platform: String = "direct",
+    val title: String = "",
+    val author: String = "",
+    val thumbnail: String = "",
+    val previewUrl: String = "",
+    val videoId: String = "",
     val contentType: String = "",
     val fileSize: String = "",
     val qualityStatus: String = ""
@@ -53,16 +62,75 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private fun extractYouTubeId(input: String): String? {
+    return try {
+        val url = URL(input)
+        val host = url.host.lowercase().removePrefix("www.")
+
+        val id = when (host) {
+            "youtu.be" -> url.path
+                .split("/")
+                .filter { it.isNotBlank() }
+                .firstOrNull()
+
+            "youtube.com",
+            "m.youtube.com",
+            "music.youtube.com" -> {
+                val queryId = url.query
+                    ?.split("&")
+                    ?.firstOrNull { it.startsWith("v=") }
+                    ?.substringAfter("v=")
+
+                if (!queryId.isNullOrBlank()) {
+                    queryId
+                } else {
+                    val parts = url.path
+                        .split("/")
+                        .filter { it.isNotBlank() }
+
+                    if (
+                        parts.size >= 2 &&
+                        parts[0] in listOf(
+                            "shorts", "embed", "live"
+                        )
+                    ) {
+                        parts[1]
+                    } else {
+                        null
+                    }
+                }
+            }
+
+            else -> null
+        }
+
+        if (id != null && id.matches(Regex("[A-Za-z0-9_-]{11}"))) {
+            id
+        } else {
+            null
+        }
+    } catch (_: Exception) {
+        null
+    }
+}
+
 private fun inspectVideoUrl(videoUrl: String): InspectionResult {
     var connection: HttpURLConnection? = null
 
     return try {
-        connection = (URL(
+        val youtubeId = extractYouTubeId(videoUrl)
+
+        val endpoint = if (youtubeId != null) {
+            "$API_BASE/api/youtube/inspect"
+        } else {
             "$API_BASE/api/video/inspect"
-        ).openConnection() as HttpURLConnection).apply {
+        }
+
+        connection = (URL(endpoint).openConnection()
+                as HttpURLConnection).apply {
             requestMethod = "POST"
-            connectTimeout = 15000
-            readTimeout = 15000
+            connectTimeout = 20000
+            readTimeout = 20000
             doOutput = true
             setRequestProperty(
                 "Content-Type",
@@ -102,14 +170,50 @@ private fun inspectVideoUrl(videoUrl: String): InspectionResult {
         } ?: ""
 
         val json = JSONObject(responseText)
-        val ok = json.optBoolean("ok", false)
 
-        if (!ok || responseCode !in 200..299) {
+        val success = json.optBoolean(
+            "success",
+            json.optBoolean("ok", false)
+        )
+
+        if (!success || responseCode !in 200..299) {
             InspectionResult(
                 success = false,
                 message = json.optString(
-                    "error",
-                    "Server returned HTTP $responseCode."
+                    "message",
+                    json.optString(
+                        "error",
+                        "Server error: HTTP $responseCode"
+                    )
+                )
+            )
+        } else if (youtubeId != null) {
+            InspectionResult(
+                success = true,
+                message = json.optString(
+                    "message",
+                    "YouTube information loaded."
+                ),
+                platform = "youtube",
+                title = json.optString(
+                    "title",
+                    "YouTube video"
+                ),
+                author = json.optString(
+                    "author",
+                    "Unknown creator"
+                ),
+                thumbnail = json.optString(
+                    "thumbnail",
+                    "https://i.ytimg.com/vi/$youtubeId/hqdefault.jpg"
+                ),
+                previewUrl = json.optString(
+                    "previewUrl",
+                    "https://www.youtube-nocookie.com/embed/$youtubeId"
+                ),
+                videoId = json.optString(
+                    "videoId",
+                    youtubeId
                 )
             )
         } else {
@@ -120,12 +224,12 @@ private fun inspectVideoUrl(videoUrl: String): InspectionResult {
 
             val type = source?.optString(
                 "contentType",
-                "Unknown"
-            ) ?: "Unknown"
+                json.optString("contentType", "Unknown")
+            ) ?: json.optString("contentType", "Unknown")
 
             val bytes = source?.optLong(
                 "contentLengthBytes",
-                -1L
+                json.optLong("fileSize", -1L)
             ) ?: -1L
 
             val size = if (bytes >= 0L) {
@@ -139,13 +243,23 @@ private fun inspectVideoUrl(videoUrl: String): InspectionResult {
 
             InspectionResult(
                 success = true,
-                message = "Video source verified by Cloudflare API.",
+                message = json.optString(
+                    "message",
+                    "Video source verified."
+                ),
+                platform = "direct",
                 contentType = type,
                 fileSize = size,
                 qualityStatus = quality?.optString(
                     "status",
+                    json.optString(
+                        "qualityStatus",
+                        "unknown"
+                    )
+                ) ?: json.optString(
+                    "qualityStatus",
                     "unknown"
-                ) ?: "unknown"
+                )
             )
         }
     } catch (e: Exception) {
@@ -160,6 +274,67 @@ private fun inspectVideoUrl(videoUrl: String): InspectionResult {
 }
 
 @Composable
+fun YouTubePreview(videoId: String) {
+    AndroidView(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(230.dp),
+        factory = { context ->
+            WebView(context).apply {
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                settings.mediaPlaybackRequiresUserGesture = true
+
+                webChromeClient = WebChromeClient()
+                webViewClient = WebViewClient()
+
+                val html = """
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                    <meta name="viewport"
+                        content="width=device-width, initial-scale=1.0">
+                    <style>
+                    * { margin: 0; padding: 0; }
+                    html, body {
+                        width: 100%;
+                        height: 100%;
+                        background: #000;
+                        overflow: hidden;
+                    }
+                    iframe {
+                        width: 100%;
+                        height: 100%;
+                        border: 0;
+                    }
+                    </style>
+                    </head>
+                    <body>
+                    <iframe
+                        src="https://www.youtube-nocookie.com/embed/$videoId"
+                        title="YouTube video preview"
+                        allow="accelerometer; autoplay; clipboard-write;
+                        encrypted-media; gyroscope; picture-in-picture;
+                        web-share"
+                        allowfullscreen>
+                    </iframe>
+                    </body>
+                    </html>
+                """.trimIndent()
+
+                loadDataWithBaseURL(
+                    "https://www.youtube-nocookie.com/",
+                    html,
+                    "text/html",
+                    "UTF-8",
+                    null
+                )
+            }
+        }
+    )
+}
+
+@Composable
 fun UltraVideoClipsApp() {
     var videoUrl by remember { mutableStateOf("") }
     var submitted by remember { mutableStateOf(false) }
@@ -167,12 +342,9 @@ fun UltraVideoClipsApp() {
     var selectedQuality by remember { mutableStateOf("720p") }
     var statusMessage by remember { mutableStateOf("") }
     var isInspecting by remember { mutableStateOf(false) }
+
     var inspection by remember {
         mutableStateOf<InspectionResult?>(null)
-    }
-
-    val mainHandler = remember {
-        Handler(Looper.getMainLooper())
     }
 
     val qualities = listOf(
@@ -219,10 +391,8 @@ fun UltraVideoClipsApp() {
                     letterSpacing = 3.sp
                 )
 
-                Spacer(Modifier.height(8.dp))
-
                 Text(
-                    "VIDEO DOWNLOADER & CLIP STUDIO",
+                    "VIDEO PREVIEW & CLIP STUDIO",
                     color = MutedText,
                     fontSize = 10.sp,
                     letterSpacing = 1.5.sp
@@ -242,7 +412,7 @@ fun UltraVideoClipsApp() {
                         modifier = Modifier.fillMaxWidth(),
                         placeholder = {
                             Text(
-                                "Paste permitted direct video URL",
+                                "Paste YouTube or direct video URL",
                                 color = MutedText
                             )
                         },
@@ -269,17 +439,17 @@ fun UltraVideoClipsApp() {
 
                             if (!cleanUrl.startsWith("https://")) {
                                 statusMessage =
-                                    "Please enter a valid HTTPS video URL."
+                                    "Please enter a valid HTTPS URL."
                             } else if (!isInspecting) {
                                 isInspecting = true
                                 statusMessage =
-                                    "Connecting to Cloudflare API..."
+                                    "Checking video information..."
 
                                 Thread {
                                     val result =
                                         inspectVideoUrl(cleanUrl)
 
-                                    mainHandler.post {
+                                    runOnUiThread {
                                         isInspecting = false
                                         inspection = result
 
@@ -332,52 +502,113 @@ fun UltraVideoClipsApp() {
                         )
                     }
                 } else {
-                    SectionTitle("SELECT YOUR MODE")
+                    val result = inspection
 
-                    inspection?.let { result ->
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(
-                                containerColor = Color(0xFF123329)
-                            ),
-                            shape = RoundedCornerShape(14.dp)
-                        ) {
-                            Column(
-                                Modifier.padding(14.dp)
+                    if (result != null) {
+                        SectionTitle("VIDEO PREVIEW")
+
+                        if (result.platform == "youtube") {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = CardBackground
+                                )
                             ) {
-                                Text(
-                                    "✓ VIDEO SOURCE VERIFIED",
-                                    color = Color(0xFF69E6A5),
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Spacer(Modifier.height(8.dp))
-                                Text(
-                                    "Content type: ${result.contentType}",
-                                    color = TextWhite,
-                                    fontSize = 12.sp
-                                )
-                                Text(
-                                    "File size: ${result.fileSize}",
-                                    color = TextWhite,
-                                    fontSize = 12.sp
-                                )
-                                Text(
-                                    "Quality detection: ${result.qualityStatus}",
-                                    color = MutedText,
-                                    fontSize = 12.sp
-                                )
+                                Column {
+                                    YouTubePreview(
+                                        result.videoId
+                                    )
+
+                                    Column(
+                                        Modifier.padding(16.dp)
+                                    ) {
+                                        Text(
+                                            result.title,
+                                            color = TextWhite,
+                                            fontSize = 17.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+
+                                        Spacer(Modifier.height(7.dp))
+
+                                        Text(
+                                            "Channel: ${result.author}",
+                                            color = MutedText,
+                                            fontSize = 13.sp
+                                        )
+
+                                        Spacer(Modifier.height(10.dp))
+
+                                        Text(
+                                            "SOURCE: YOUTUBE",
+                                            color = AccentCyan,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(Modifier.height(14.dp))
+
+                            Text(
+                                "YouTube preview only. Video downloading " +
+                                    "is not enabled for this source.",
+                                color = MutedText,
+                                fontSize = 11.sp
+                            )
+                        } else {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = Color(0xFF123329)
+                                ),
+                                shape = RoundedCornerShape(14.dp)
+                            ) {
+                                Column(
+                                    Modifier.padding(14.dp)
+                                ) {
+                                    Text(
+                                        "✓ VIDEO SOURCE VERIFIED",
+                                        color = Color(0xFF69E6A5),
+                                        fontWeight = FontWeight.Bold
+                                    )
+
+                                    Spacer(Modifier.height(8.dp))
+
+                                    Text(
+                                        "Content type: ${result.contentType}",
+                                        color = TextWhite,
+                                        fontSize = 12.sp
+                                    )
+
+                                    Text(
+                                        "File size: ${result.fileSize}",
+                                        color = TextWhite,
+                                        fontSize = 12.sp
+                                    )
+
+                                    Text(
+                                        "Quality: ${result.qualityStatus}",
+                                        color = MutedText,
+                                        fontSize = 12.sp
+                                    )
+                                }
                             }
                         }
-                        Spacer(Modifier.height(16.dp))
                     }
+
+                    Spacer(Modifier.height(22.dp))
+
+                    SectionTitle("SELECT YOUR MODE")
 
                     ModeCard(
                         "FULL VIDEO",
-                        "Download the complete video",
+                        "Complete video processing",
                         selectedMode == "FULL VIDEO"
                     ) {
                         selectedMode = "FULL VIDEO"
-                        statusMessage = ""
                     }
 
                     ModeCard(
@@ -386,31 +617,29 @@ fun UltraVideoClipsApp() {
                         selectedMode == "CLIPS"
                     ) {
                         selectedMode = "CLIPS"
-                        statusMessage = ""
                     }
 
                     ModeCard(
                         "FULL MP3",
-                        "Extract the complete audio",
+                        "Extract complete audio",
                         selectedMode == "FULL MP3"
                     ) {
                         selectedMode = "FULL MP3"
-                        statusMessage = ""
                     }
 
-                    Spacer(Modifier.height(20.dp))
+                    Spacer(Modifier.height(18.dp))
 
                     if (selectedMode == "FULL VIDEO") {
                         SectionTitle("VIDEO QUALITY")
 
                         Text(
-                            "Choose a preferred quality. Actual source " +
-                                "availability is not detected yet.",
+                            "Actual available qualities will be detected " +
+                                "when the processing service is connected.",
                             color = MutedText,
                             fontSize = 12.sp
                         )
 
-                        Spacer(Modifier.height(14.dp))
+                        Spacer(Modifier.height(12.dp))
 
                         qualities.chunked(2).forEach { rowItems ->
                             Row(
@@ -447,40 +676,31 @@ fun UltraVideoClipsApp() {
                             }
                         }
 
-                        Spacer(Modifier.height(16.dp))
+                        Spacer(Modifier.height(14.dp))
 
                         FeaturePlaceholder(
                             "PROCESSOR NOT CONNECTED",
-                            "Cloudflare has verified the video URL. " +
-                                "Actual quality detection and downloading " +
-                                "require the separate FFmpeg processing service."
+                            "The FFmpeg processing service is not " +
+                                "connected yet. This selection does not " +
+                                "start a download."
                         )
                     } else if (selectedMode == "CLIPS") {
                         FeaturePlaceholder(
                             "CLIPS PROCESSING",
-                            "The video source is verified. Clip extraction " +
-                                "will be enabled after the FFmpeg and AI " +
-                                "processing service is connected."
+                            "Clip duration, quantity and AI moment " +
+                                "selection will be connected to the " +
+                                "processing service."
                         )
                     } else if (selectedMode == "FULL MP3") {
                         FeaturePlaceholder(
                             "MP3 PROCESSING",
-                            "Audio extraction will be enabled after " +
-                                "the media-processing service is connected."
+                            "Audio extraction and bitrate options " +
+                                "will be connected to the processing service."
                         )
                     } else {
                         Text(
                             "Select an option above to continue.",
                             color = MutedText
-                        )
-                    }
-
-                    if (statusMessage.isNotEmpty()) {
-                        Spacer(Modifier.height(14.dp))
-                        Text(
-                            statusMessage,
-                            color = AccentCyan,
-                            fontSize = 13.sp
                         )
                     }
 
@@ -512,7 +732,7 @@ fun UltraVideoClipsApp() {
                 )
 
                 Text(
-                    "Use media you own or have permission to download.",
+                    "Use media you own or have permission to process.",
                     color = MutedText,
                     fontSize = 10.sp,
                     textAlign = TextAlign.Center,
@@ -560,10 +780,7 @@ fun ModeCard(
             }
         ),
         border = if (selected) {
-            androidx.compose.foundation.BorderStroke(
-                1.dp,
-                AccentCyan
-            )
+            BorderStroke(1.dp, AccentCyan)
         } else {
             null
         }
@@ -581,13 +798,16 @@ fun ModeCard(
                     fontSize = 17.sp,
                     fontWeight = FontWeight.ExtraBold
                 )
+
                 Spacer(Modifier.height(5.dp))
+
                 Text(
                     description,
                     color = MutedText,
                     fontSize = 12.sp
                 )
             }
+
             Text(
                 if (selected) "✓" else "›",
                 color = AccentCyan,
@@ -617,7 +837,9 @@ fun FeaturePlaceholder(
                 fontWeight = FontWeight.ExtraBold,
                 fontSize = 16.sp
             )
+
             Spacer(Modifier.height(10.dp))
+
             Text(
                 description,
                 color = MutedText,
