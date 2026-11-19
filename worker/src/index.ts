@@ -1,48 +1,50 @@
 interface Env {}
 
+const VERSION = "1.2.0-free-plan";
+
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  "Content-Type": "application/json; charset=utf-8",
 };
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: {
-      ...CORS_HEADERS,
-      "Content-Type": "application/json",
-    },
+    headers: CORS_HEADERS,
   });
 }
 
-function extractYouTubeId(input: string): string | null {
+function getVideoId(input: string): string | null {
   try {
     const url = new URL(input);
-    const host = url.hostname.toLowerCase().replace(/^www\./, "");
+    const host = url.hostname.toLowerCase();
 
-    if (host === "youtu.be") {
+    if (
+      host === "youtu.be" ||
+      host === "www.youtu.be"
+    ) {
       return url.pathname.split("/").filter(Boolean)[0] || null;
     }
 
-    const allowedHosts = [
-      "youtube.com",
-      "m.youtube.com",
-      "music.youtube.com",
-    ];
-
-    if (!allowedHosts.includes(host)) return null;
-
-    const videoId = url.searchParams.get("v");
-    if (videoId) return videoId;
-
-    const parts = url.pathname.split("/").filter(Boolean);
-
     if (
-      ["shorts", "embed", "live"].includes(parts[0]) &&
-      parts[1]
+      host === "youtube.com" ||
+      host === "www.youtube.com" ||
+      host === "m.youtube.com" ||
+      host === "music.youtube.com"
     ) {
-      return parts[1];
+      if (url.pathname === "/watch") {
+        return url.searchParams.get("v");
+      }
+
+      const parts = url.pathname.split("/").filter(Boolean);
+
+      if (
+        ["shorts", "embed", "live"].includes(parts[0] || "")
+      ) {
+        return parts[1] || null;
+      }
     }
 
     return null;
@@ -51,195 +53,380 @@ function extractYouTubeId(input: string): string | null {
   }
 }
 
-function validVideoId(id: string): boolean {
-  return /^[a-zA-Z0-9_-]{11}$/.test(id);
+function isPrivateIPv4(host: string): boolean {
+  const parts = host.split(".");
+
+  if (
+    parts.length !== 4 ||
+    parts.some((part) => !/^\d+$/.test(part))
+  ) {
+    return false;
+  }
+
+  const nums = parts.map(Number);
+
+  if (nums.some((n) => n < 0 || n > 255)) {
+    return true;
+  }
+
+  const [a, b] = nums;
+
+  return (
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    a >= 224 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 192 && b === 0) ||
+    (a === 198 && (b === 18 || b === 19))
+  );
 }
 
-async function inspectYouTube(request: Request): Promise<Response> {
-  let body: { url?: string };
+function isBlockedHost(host: string): boolean {
+  const normalized = host.toLowerCase().replace(/^\[|\]$/g, "");
 
-  try {
-    body = await request.json();
-  } catch {
-    return json({ success: false, message: "Invalid JSON body." }, 400);
+  if (
+    normalized === "localhost" ||
+    normalized.endsWith(".localhost") ||
+    normalized.endsWith(".local") ||
+    normalized === "::1" ||
+    normalized === "::" ||
+    normalized.startsWith("fc") ||
+    normalized.startsWith("fd") ||
+    normalized.startsWith("fe80:")
+  ) {
+    return true;
   }
 
-  const input = body.url?.trim();
-
-  if (!input) {
-    return json({ success: false, message: "Video URL is required." }, 400);
+  if (normalized.includes(":")) {
+    return true;
   }
 
-  const videoId = extractYouTubeId(input);
-
-  if (!videoId || !validVideoId(videoId)) {
-    return json({
-      success: false,
-      message: "Invalid or unsupported YouTube URL.",
-    }, 400);
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(normalized)) {
+    return isPrivateIPv4(normalized);
   }
 
-  const canonicalUrl = `https://www.youtube.com/watch?v=${videoId}`;
+  return false;
+}
 
-  const oembedUrl = new URL("https://www.youtube.com/oembed");
-  oembedUrl.searchParams.set("url", canonicalUrl);
-  oembedUrl.searchParams.set("format", "json");
-
-  try {
-    const response = await fetch(oembedUrl.toString(), {
-      headers: { Accept: "application/json" },
-    });
-
-    if (!response.ok) {
-      return json({
-        success: false,
-        message: "YouTube video metadata is unavailable. The video may be private, restricted, or unavailable.",
-      }, 404);
-    }
-
-    const metadata = await response.json() as {
-      title?: string;
-      author_name?: string;
-      thumbnail_url?: string;
-      thumbnail_width?: number;
-      thumbnail_height?: number;
+function validateDirectVideoUrl(
+  input: unknown
+): { valid: true; url: URL } | { valid: false; error: string } {
+  if (typeof input !== "string" || input.length > 4096) {
+    return {
+      valid: false,
+      error: "A valid video URL is required.",
     };
-
-    return json({
-      success: true,
-      platform: "youtube",
-      videoId,
-      url: canonicalUrl,
-      title: metadata.title ?? "YouTube video",
-      author: metadata.author_name ?? "Unknown creator",
-      thumbnail: metadata.thumbnail_url ??
-        `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-      previewUrl: `https://www.youtube-nocookie.com/embed/${videoId}`,
-      previewAvailable: true,
-      downloadAvailable: false,
-      message: "YouTube preview information loaded successfully.",
-    });
-  } catch {
-    return json({
-      success: false,
-      message: "Could not connect to YouTube. Please try again.",
-    }, 502);
-  }
-}
-
-async function inspectDirectVideo(request: Request): Promise<Response> {
-  let body: { url?: string };
-
-  try {
-    body = await request.json();
-  } catch {
-    return json({ success: false, message: "Invalid JSON body." }, 400);
-  }
-
-  const input = body.url?.trim();
-
-  if (!input) {
-    return json({ success: false, message: "Video URL is required." }, 400);
   }
 
   let url: URL;
 
   try {
-    url = new URL(input);
+    url = new URL(input.trim());
   } catch {
-    return json({ success: false, message: "Invalid URL." }, 400);
+    return {
+      valid: false,
+      error: "Invalid URL format.",
+    };
   }
 
   if (url.protocol !== "https:") {
-    return json({
-      success: false,
-      message: "Only HTTPS video URLs are supported.",
-    }, 400);
+    return {
+      valid: false,
+      error: "Only HTTPS video URLs are supported.",
+    };
   }
 
-  const host = url.hostname.toLowerCase();
+  if (url.username || url.password) {
+    return {
+      valid: false,
+      error: "URLs containing credentials are not allowed.",
+    };
+  }
+
+  if (url.port && url.port !== "443") {
+    return {
+      valid: false,
+      error: "Custom ports are not allowed.",
+    };
+  }
+
+  if (isBlockedHost(url.hostname)) {
+    return {
+      valid: false,
+      error: "Private or local network URLs are not allowed.",
+    };
+  }
+
+  return { valid: true, url };
+}
+
+async function inspectYouTube(body: any): Promise<Response> {
+  const input = body?.url;
+
+  if (typeof input !== "string") {
+    return json(
+      {
+        success: false,
+        error: "YouTube URL is required.",
+      },
+      400
+    );
+  }
+
+  const videoId = getVideoId(input);
 
   if (
-    host === "localhost" ||
-    host.endsWith(".localhost") ||
-    host.endsWith(".local") ||
-    host === "127.0.0.1" ||
-    host === "::1" ||
-    host.startsWith("10.") ||
-    host.startsWith("192.168.") ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(host)
+    !videoId ||
+    !/^[a-zA-Z0-9_-]{11}$/.test(videoId)
   ) {
-    return json({ success: false, message: "Private network URLs are not allowed." }, 400);
+    return json(
+      {
+        success: false,
+        error: "Invalid YouTube video URL.",
+      },
+      400
+    );
   }
 
+  const canonicalUrl =
+    `https://www.youtube.com/watch?v=${videoId}`;
+
   try {
-    const response = await fetch(url.toString(), {
-      method: "HEAD",
-      redirect: "manual",
+    const endpoint =
+      "https://www.youtube.com/oembed?format=json&url=" +
+      encodeURIComponent(canonicalUrl);
+
+    const response = await fetch(endpoint, {
+      headers: {
+        "User-Agent": "ULTRA-VIDEO-CLIPS/1.0",
+      },
     });
 
     if (!response.ok) {
-      return json({
-        success: false,
-        message: "Could not inspect this video URL.",
-      }, 400);
+      return json(
+        {
+          success: false,
+          error: "YouTube video information is unavailable.",
+        },
+        404
+      );
     }
 
-    const contentType = response.headers.get("content-type") || "";
-    const contentLength = response.headers.get("content-length");
-
-    if (
-      !contentType.toLowerCase().startsWith("video/") &&
-      !contentType.toLowerCase().includes("application/octet-stream")
-    ) {
-      return json({
-        success: false,
-        message: "The URL does not point to a recognized video file.",
-      }, 415);
-    }
+    const metadata: any = await response.json();
 
     return json({
       success: true,
-      platform: "direct",
-      url: url.toString(),
-      contentType,
-      fileSize: contentLength ? Number(contentLength) : null,
-      qualityStatus: "not-yet-connected",
+      type: "youtube",
+      videoId,
+      title: metadata.title || "Unknown title",
+      author: metadata.author_name || "Unknown creator",
+      thumbnail:
+        `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
+      previewUrl:
+        `https://www.youtube.com/embed/${videoId}`,
+      originalUrl: canonicalUrl,
+      downloadAvailable: false,
       processingAvailable: false,
-      message: "Video source inspected. Processing service is not connected yet.",
+      message:
+        "YouTube preview is available. Media downloading and extraction are not provided.",
     });
   } catch {
-    return json({
-      success: false,
-      message: "Could not connect to the video source.",
-    }, 502);
+    return json(
+      {
+        success: false,
+        error: "Unable to connect to YouTube.",
+      },
+      502
+    );
   }
 }
 
+function inspectDirectVideo(body: any): Response {
+  const result = validateDirectVideoUrl(body?.url);
+
+  if (!result.valid) {
+    return json(
+      {
+        success: false,
+        error: result.error,
+      },
+      400
+    );
+  }
+
+  return json({
+    success: true,
+    type: "direct_video",
+    originalUrl: result.url.toString(),
+    host: result.url.hostname,
+    urlValidated: true,
+    contentType: "not_checked",
+    downloadAvailable: false,
+    processingAvailable: false,
+    processingMode: "android-local",
+    message:
+      "URL validation completed. The Android app must download the authorized media and inspect it locally before processing.",
+  });
+}
+
+function getCapabilities(): Response {
+  return json({
+    success: true,
+    application: "ULTRA VIDEO CLIPS",
+    version: VERSION,
+    plan: "cloudflare-free",
+    capabilities: {
+      api: true,
+      youtubeMetadata: true,
+      youtubePreview: true,
+      directUrlValidation: true,
+      androidLocalProcessing: true,
+      cloudProcessing: false,
+      cloudFFmpeg: false,
+      videoDownloadFromWorker: false,
+      videoClippingOnWorker: false,
+      audioExtractionOnWorker: false,
+      mp3ConversionOnWorker: false,
+    },
+    processing: {
+      mode: "android-local",
+      requiredComponents: [
+        "Android MediaExtractor",
+        "Android MediaMuxer",
+        "Android MediaCodec",
+      ],
+      message:
+        "Video processing must be implemented inside the Android application. This Worker does not run FFmpeg or process media files.",
+    },
+  });
+}
+
+async function handleRequest(
+  request: Request,
+  _env: Env
+): Promise<Response> {
+  const url = new URL(request.url);
+  const path = url.pathname;
+
+  if (request.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: CORS_HEADERS,
+    });
+  }
+
+  if (request.method === "GET" && path === "/") {
+    return json({
+      success: true,
+      name: "ULTRA VIDEO CLIPS API",
+      version: VERSION,
+      status: "online",
+    });
+  }
+
+  if (request.method === "GET" && path === "/health") {
+    return json({
+      success: true,
+      status: "healthy",
+      version: VERSION,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  if (
+    request.method === "GET" &&
+    path === "/api/processing/capabilities"
+  ) {
+    return getCapabilities();
+  }
+
+  if (request.method !== "POST") {
+    return json(
+      {
+        success: false,
+        error: "Method not allowed.",
+      },
+      405
+    );
+  }
+
+  let body: any;
+
+  try {
+    const contentLength = Number(
+      request.headers.get("content-length") || "0"
+    );
+
+    if (contentLength > 16384) {
+      return json(
+        {
+          success: false,
+          error: "Request body is too large.",
+        },
+        413
+      );
+    }
+
+    const rawBody = await request.text();
+
+    if (rawBody.length > 16384) {
+      return json(
+        {
+          success: false,
+          error: "Request body is too large.",
+        },
+        413
+      );
+    }
+
+    body = JSON.parse(rawBody);
+  } catch {
+    return json(
+      {
+        success: false,
+        error: "Invalid JSON request body.",
+      },
+      400
+    );
+  }
+
+  if (path === "/api/youtube/inspect") {
+    return inspectYouTube(body);
+  }
+
+  if (path === "/api/video/inspect") {
+    return inspectDirectVideo(body);
+  }
+
+  return json(
+    {
+      success: false,
+      error: "API endpoint not found.",
+      path,
+    },
+    404
+  );
+}
+
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    if (request.method === "OPTIONS") {
-      return new Response(null, { headers: CORS_HEADERS });
+  async fetch(
+    request: Request,
+    env: Env
+  ): Promise<Response> {
+    try {
+      return await handleRequest(request, env);
+    } catch {
+      return json(
+        {
+          success: false,
+          error: "Internal server error.",
+        },
+        500
+      );
     }
-
-    const url = new URL(request.url);
-
-    if (request.method === "GET" && url.pathname === "/health") {
-      return json({
-        ok: true,
-        service: "ULTRA VIDEO CLIPS API",
-        version: "1.1.0",
-      });
-    }
-
-    if (request.method === "POST" && url.pathname === "/api/youtube/inspect") {
-      return inspectYouTube(request);
-    }
-
-    if (request.method === "POST" && url.pathname === "/api/video/inspect") {
-      return inspectDirectVideo(request);
-    }
-
-    return json({ success: false, message: "Route not found." }, 404);
   },
 };
