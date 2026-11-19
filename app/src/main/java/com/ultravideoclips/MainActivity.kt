@@ -4,264 +4,518 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-private val DarkBackground = Color(0xFF090D18)
-private val PanelColor = Color(0xFF151D30)
-private val AccentColor = Color(0xFF00D5FF)
+private val DarkBackground = Color(0xFF080D18)
+private val CardBackground = Color(0xFF121C2D)
+private val AccentCyan = Color(0xFF00D9FF)
+private val TextWhite = Color(0xFFF4F8FF)
+private val MutedText = Color(0xFF9BAAC0)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         setContent {
-            MaterialTheme {
-                UltraVideoClipsApp()
-            }
+            UltraVideoClipsApp()
         }
     }
 }
 
 @Composable
 fun UltraVideoClipsApp() {
-    var videoLink by remember { mutableStateOf("") }
+    var videoUrl by remember { mutableStateOf("") }
     var submitted by remember { mutableStateOf(false) }
     var selectedMode by remember { mutableStateOf("") }
-    var message by remember { mutableStateOf("") }
+    var selectedQuality by remember { mutableStateOf("720p") }
+    var statusMessage by remember { mutableStateOf("") }
 
-    Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = DarkBackground
+    val qualities = listOf(
+        "144p", "240p", "360p", "480p",
+        "720p", "1080p", "2K", "4K"
+    )
+
+    MaterialTheme(
+        colorScheme = darkColorScheme(
+            primary = AccentCyan,
+            background = DarkBackground,
+            surface = CardBackground,
+            onPrimary = Color.Black,
+            onBackground = TextWhite,
+            onSurface = TextWhite
+        )
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = DarkBackground
         ) {
-            Spacer(Modifier.height(28.dp))
-
-            Text(
-                text = "ULTRA",
-                color = AccentColor,
-                fontSize = 36.sp,
-                fontWeight = FontWeight.Black
-            )
-
-            Text(
-                text = "VIDEO CLIPS",
-                color = Color.White,
-                fontSize = 25.sp,
-                fontWeight = FontWeight.Bold
-            )
-
-            Text(
-                text = "VIDEO • CLIPS • AUDIO",
-                color = Color.LightGray,
-                fontSize = 12.sp,
-                letterSpacing = 2.sp
-            )
-
-            Spacer(Modifier.height(35.dp))
-
-            Text(
-                text = "Paste Your Video Link",
-                color = Color.White,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            Spacer(Modifier.height(12.dp))
-
-            OutlinedTextField(
-                value = videoLink,
-                onValueChange = {
-                    videoLink = it
-                    submitted = false
-                    selectedMode = ""
-                    message = ""
-                },
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = {
-                    Text("Paste a permitted video URL")
-                },
-                shape = RoundedCornerShape(14.dp),
-                singleLine = true,
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White,
-                    focusedBorderColor = AccentColor,
-                    unfocusedBorderColor = Color.Gray,
-                    focusedPlaceholderColor = Color.Gray,
-                    unfocusedPlaceholderColor = Color.Gray,
-                    cursorColor = AccentColor
-                )
-            )
-
-            Spacer(Modifier.height(15.dp))
-
-            Button(
-                onClick = {
-                    if (videoLink.isBlank()) {
-                        message = "Please paste a video link first."
-                    } else {
-                        submitted = true
-                        message = "Link received. Select an option below."
-                    }
-                },
+            Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .height(54.dp),
-                shape = RoundedCornerShape(14.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = AccentColor,
-                    contentColor = Color.Black
-                )
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
+
+                Spacer(modifier = Modifier.height(18.dp))
+
                 Text(
-                    "SUBMIT",
+                    text = "ULTRA",
+                    color = AccentCyan,
+                    fontSize = 34.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = 4.sp
+                )
+
+                Text(
+                    text = "VIDEO CLIPS",
+                    color = TextWhite,
+                    fontSize = 22.sp,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp
+                    letterSpacing = 3.sp
                 )
-            }
 
-            if (message.isNotBlank()) {
-                Spacer(Modifier.height(12.dp))
-                Text(message, color = AccentColor, fontSize = 13.sp)
-            }
-
-            if (submitted) {
-                Spacer(Modifier.height(30.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
-                    "CHOOSE YOUR MODE",
-                    color = Color.White,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold
+                    text = "VIDEO DOWNLOADER & CLIP STUDIO",
+                    color = MutedText,
+                    fontSize = 10.sp,
+                    letterSpacing = 1.5.sp
                 )
 
-                Spacer(Modifier.height(18.dp))
+                Spacer(modifier = Modifier.height(30.dp))
 
-                ModeCard(
-                    title = "FULL VIDEO",
-                    description = "Download a complete video from an authorized source.",
-                    symbol = "▶",
-                    selected = selectedMode == "FULL VIDEO",
-                    onClick = { selectedMode = "FULL VIDEO" }
-                )
+                if (!submitted) {
 
-                ModeCard(
-                    title = "CLIPS",
-                    description = "Prepare separate highlight clips from permitted media.",
-                    symbol = "✂",
-                    selected = selectedMode == "CLIPS",
-                    onClick = { selectedMode = "CLIPS" }
-                )
+                    SectionTitle("VIDEO SOURCE")
 
-                ModeCard(
-                    title = "FULL MP3",
-                    description = "Extract the complete audio from media you may process.",
-                    symbol = "♫",
-                    selected = selectedMode == "FULL MP3",
-                    onClick = { selectedMode = "FULL MP3" }
-                )
-
-                if (selectedMode.isNotBlank()) {
-                    Spacer(Modifier.height(16.dp))
-                    Text(
-                        "$selectedMode selected",
-                        color = AccentColor,
-                        fontWeight = FontWeight.Bold
+                    OutlinedTextField(
+                        value = videoUrl,
+                        onValueChange = {
+                            videoUrl = it
+                            statusMessage = ""
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = {
+                            Text(
+                                "Paste your permitted video URL",
+                                color = MutedText
+                            )
+                        },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = AccentCyan,
+                            unfocusedBorderColor = Color(0xFF34445C),
+                            focusedTextColor = TextWhite,
+                            unfocusedTextColor = TextWhite,
+                            cursorColor = AccentCyan
+                        ),
+                        keyboardOptions = KeyboardOptions(
+                            imeAction = ImeAction.Done
+                        ),
+                        keyboardActions = KeyboardActions(
+                            onDone = {}
+                        )
                     )
-                    Text(
-                        "Processing features will be connected in the next development step.",
-                        color = Color.LightGray,
-                        fontSize = 12.sp
+
+                    Spacer(modifier = Modifier.height(18.dp))
+
+                    Button(
+                        onClick = {
+                            if (videoUrl.trim().startsWith("http://") ||
+                                videoUrl.trim().startsWith("https://")
+                            ) {
+                                submitted = true
+                                statusMessage = ""
+                            } else {
+                                statusMessage =
+                                    "Please enter a valid video URL."
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(54.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = AccentCyan,
+                            contentColor = Color.Black
+                        )
+                    ) {
+                        Text(
+                            "SUBMIT",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                    }
+
+                    if (statusMessage.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            statusMessage,
+                            color = Color(0xFFFF7777)
+                        )
+                    }
+
+                } else {
+
+                    SectionTitle("SELECT YOUR MODE")
+
+                    ModeCard(
+                        title = "FULL VIDEO",
+                        description = "Download the complete video",
+                        selected = selectedMode == "FULL VIDEO",
+                        onClick = {
+                            selectedMode = "FULL VIDEO"
+                            statusMessage = ""
+                        }
                     )
+
+                    ModeCard(
+                        title = "CLIPS",
+                        description = "Create multiple short video clips",
+                        selected = selectedMode == "CLIPS",
+                        onClick = {
+                            selectedMode = "CLIPS"
+                            statusMessage = ""
+                        }
+                    )
+
+                    ModeCard(
+                        title = "FULL MP3",
+                        description = "Extract the complete audio",
+                        selected = selectedMode == "FULL MP3",
+                        onClick = {
+                            selectedMode = "FULL MP3"
+                            statusMessage = ""
+                        }
+                    )
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    if (selectedMode == "FULL VIDEO") {
+
+                        SectionTitle("VIDEO QUALITY")
+
+                        Text(
+                            text = "Choose your preferred quality",
+                            color = MutedText,
+                            fontSize = 13.sp,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        qualities.chunked(2).forEach { rowQualities ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement =
+                                    Arrangement.spacedBy(12.dp)
+                            ) {
+                                rowQualities.forEach { quality ->
+                                    FilterChip(
+                                        selected =
+                                            selectedQuality == quality,
+                                        onClick = {
+                                            selectedQuality = quality
+                                            statusMessage = ""
+                                        },
+                                        label = {
+                                            Text(
+                                                quality,
+                                                fontWeight =
+                                                    FontWeight.Bold
+                                            )
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                        colors =
+                                            FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor =
+                                                    AccentCyan,
+                                                selectedLabelColor =
+                                                    Color.Black,
+                                                labelColor = TextWhite
+                                            )
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = CardBackground
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(16.dp)
+                            ) {
+                                Text(
+                                    "SELECTED QUALITY",
+                                    color = MutedText,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+
+                                Spacer(
+                                    modifier = Modifier.height(6.dp)
+                                )
+
+                                Text(
+                                    selectedQuality,
+                                    color = AccentCyan,
+                                    fontSize = 26.sp,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+
+                                Spacer(
+                                    modifier = Modifier.height(8.dp)
+                                )
+
+                                Text(
+                                    "Actual availability will be checked " +
+                                        "from the video source in the next " +
+                                        "backend development step.",
+                                    color = MutedText,
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(18.dp))
+
+                        Button(
+                            onClick = {
+                                statusMessage =
+                                    "Quality selection saved. " +
+                                    "Video source detection and downloading " +
+                                    "will be connected in the next step."
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(54.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = AccentCyan,
+                                contentColor = Color.Black
+                            )
+                        ) {
+                            Text(
+                                "DOWNLOAD VIDEO",
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 15.sp
+                            )
+                        }
+
+                    } else if (selectedMode == "CLIPS") {
+
+                        FeaturePlaceholder(
+                            "CLIPS",
+                            "Clip duration, quantity and moment " +
+                                "selection will be added in the next step."
+                        )
+
+                    } else if (selectedMode == "FULL MP3") {
+
+                        FeaturePlaceholder(
+                            "FULL MP3",
+                            "Audio quality selection and MP3 " +
+                                "processing will be added in the next step."
+                        )
+
+                    } else {
+
+                        Text(
+                            "Select an option above to continue.",
+                            color = MutedText,
+                            modifier = Modifier.padding(16.dp)
+                        )
+                    }
+
+                    if (statusMessage.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = Color(0xFF17283A)
+                            )
+                        ) {
+                            Text(
+                                statusMessage,
+                                modifier = Modifier.padding(14.dp),
+                                color = AccentCyan,
+                                fontSize = 13.sp
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(18.dp))
+
+                    TextButton(
+                        onClick = {
+                            submitted = false
+                            selectedMode = ""
+                            selectedQuality = "720p"
+                            statusMessage = ""
+                        }
+                    ) {
+                        Text(
+                            "CHANGE VIDEO URL",
+                            color = AccentCyan
+                        )
+                    }
                 }
+
+                Spacer(modifier = Modifier.height(28.dp))
+
+                Text(
+                    "ULTRA VIDEO CLIPS",
+                    color = MutedText,
+                    fontSize = 11.sp,
+                    letterSpacing = 1.sp
+                )
+
+                Text(
+                    "Use media you own or have permission to download.",
+                    color = MutedText,
+                    fontSize = 10.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
             }
-
-            Spacer(Modifier.height(35.dp))
-
-            HorizontalDivider(color = Color.DarkGray)
-
-            Spacer(Modifier.height(15.dp))
-
-            Text(
-                "ULTRA VIDEO CLIPS",
-                color = Color.Gray,
-                fontSize = 11.sp
-            )
-            Text(
-                "Use only media you own or have permission to download and edit.",
-                color = Color.Gray,
-                fontSize = 10.sp
-            )
         }
     }
+}
+
+@Composable
+fun SectionTitle(title: String) {
+    Text(
+        text = title,
+        color = AccentCyan,
+        fontSize = 13.sp,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = 1.2.sp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 12.dp)
+    )
 }
 
 @Composable
 fun ModeCard(
     title: String,
     description: String,
-    symbol: String,
     selected: Boolean,
     onClick: () -> Unit
 ) {
     Card(
+        onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 7.dp)
-            .clickable(onClick = onClick),
+            .padding(bottom = 12.dp),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (selected) Color(0xFF17374A) else PanelColor
+            containerColor = if (selected) {
+                Color(0xFF183449)
+            } else {
+                CardBackground
+            }
         ),
         border = if (selected) {
-            androidx.compose.foundation.BorderStroke(1.dp, AccentColor)
-        } else null
+            androidx.compose.foundation.BorderStroke(
+                1.dp,
+                AccentCyan
+            )
+        } else {
+            null
+        }
     ) {
         Row(
-            modifier = Modifier.padding(20.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(18.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                symbol,
-                color = AccentColor,
-                fontSize = 30.sp,
-                fontWeight = FontWeight.Bold
-            )
-
-            Spacer(Modifier.width(18.dp))
-
-            Column {
+            Column(
+                modifier = Modifier.weight(1f)
+            ) {
                 Text(
                     title,
-                    color = Color.White,
+                    color = if (selected) AccentCyan else TextWhite,
                     fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.ExtraBold
                 )
-                Spacer(Modifier.height(5.dp))
+
+                Spacer(modifier = Modifier.height(5.dp))
+
                 Text(
                     description,
-                    color = Color.LightGray,
+                    color = MutedText,
                     fontSize = 12.sp
                 )
             }
+
+            Text(
+                if (selected) "✓" else "›",
+                color = AccentCyan,
+                fontSize = 25.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
+@Composable
+fun FeaturePlaceholder(
+    title: String,
+    description: String
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = CardBackground
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp)
+        ) {
+            Text(
+                title,
+                color = AccentCyan,
+                fontWeight = FontWeight.ExtraBold,
+                fontSize = 18.sp
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Text(
+                description,
+                color = MutedText,
+                fontSize = 13.sp
+            )
         }
     }
 }
