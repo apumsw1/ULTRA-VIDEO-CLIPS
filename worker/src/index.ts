@@ -1,432 +1,554 @@
-interface Env {}
+export interface Env {
+  DB: D1Database;
+  MEDIA_QUEUE: Queue<DownloadJob>;
+  MEDIA_BUCKET: R2Bucket;
+  PROCESSOR_SHARED_SECRET: string;
+  PROCESSOR_URL: string;
+  PUBLIC_API_BASE: string;
+  PUBLIC_MEDIA_BASE_URL?: string;
+}
 
-const VERSION = "1.2.0-free-plan";
+interface DownloadJob {
+  jobId: string;
+  sourceUrl: string;
+  format: string;
+  createdAt: number;
+}
 
-const CORS_HEADERS = {
+const HEADERS = {
+  "Content-Type": "application/json; charset=utf-8",
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
-  "Content-Type": "application/json; charset=utf-8",
+  "Access-Control-Allow-Headers":
+    "Content-Type, X-Processor-Secret"
 };
 
-function json(data: unknown, status = 200): Response {
+const FORMATS = [
+  "source", "360", "480", "720",
+  "1080", "1440", "2160"
+];
+
+function response(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: CORS_HEADERS,
+    headers: HEADERS
   });
 }
 
-function getVideoId(input: string): string | null {
-  try {
-    const url = new URL(input);
-    const host = url.hostname.toLowerCase();
-
-    if (
-      host === "youtu.be" ||
-      host === "www.youtu.be"
-    ) {
-      return url.pathname.split("/").filter(Boolean)[0] || null;
-    }
-
-    if (
-      host === "youtube.com" ||
-      host === "www.youtube.com" ||
-      host === "m.youtube.com" ||
-      host === "music.youtube.com"
-    ) {
-      if (url.pathname === "/watch") {
-        return url.searchParams.get("v");
-      }
-
-      const parts = url.pathname.split("/").filter(Boolean);
-
-      if (
-        ["shorts", "embed", "live"].includes(parts[0] || "")
-      ) {
-        return parts[1] || null;
-      }
-    }
-
-    return null;
-  } catch {
-    return null;
-  }
+function validId(id: string) {
+  return /^[a-f0-9-]{36}$/i.test(id);
 }
 
-function isPrivateIPv4(host: string): boolean {
-  const parts = host.split(".");
-
-  if (
-    parts.length !== 4 ||
-    parts.some((part) => !/^\d+$/.test(part))
-  ) {
-    return false;
-  }
-
-  const nums = parts.map(Number);
-
-  if (nums.some((n) => n < 0 || n > 255)) {
-    return true;
-  }
-
-  const [a, b] = nums;
-
-  return (
-    a === 0 ||
-    a === 10 ||
-    a === 127 ||
-    a >= 224 ||
-    (a === 100 && b >= 64 && b <= 127) ||
-    (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) ||
-    (a === 192 && b === 0) ||
-    (a === 198 && (b === 18 || b === 19))
-  );
-}
-
-function isBlockedHost(host: string): boolean {
-  const normalized = host.toLowerCase().replace(/^\[|\]$/g, "");
-
-  if (
-    normalized === "localhost" ||
-    normalized.endsWith(".localhost") ||
-    normalized.endsWith(".local") ||
-    normalized === "::1" ||
-    normalized === "::" ||
-    normalized.startsWith("fc") ||
-    normalized.startsWith("fd") ||
-    normalized.startsWith("fe80:")
-  ) {
-    return true;
-  }
-
-  if (normalized.includes(":")) {
-    return true;
-  }
-
-  if (/^\d+\.\d+\.\d+\.\d+$/.test(normalized)) {
-    return isPrivateIPv4(normalized);
-  }
-
-  return false;
-}
-
-function validateDirectVideoUrl(
-  input: unknown
-): { valid: true; url: URL } | { valid: false; error: string } {
-  if (typeof input !== "string" || input.length > 4096) {
-    return {
-      valid: false,
-      error: "A valid video URL is required.",
-    };
+function validateUrl(value: unknown): string {
+  if (typeof value !== "string" || value.length > 4096) {
+    throw new Error("Invalid video URL.");
   }
 
   let url: URL;
 
   try {
-    url = new URL(input.trim());
+    url = new URL(value);
   } catch {
-    return {
-      valid: false,
-      error: "Invalid URL format.",
-    };
+    throw new Error("Invalid URL.");
   }
 
   if (url.protocol !== "https:") {
-    return {
-      valid: false,
-      error: "Only HTTPS video URLs are supported.",
-    };
+    throw new Error("HTTPS URLs only.");
   }
 
   if (url.username || url.password) {
-    return {
-      valid: false,
-      error: "URLs containing credentials are not allowed.",
-    };
+    throw new Error("URL credentials are not allowed.");
   }
 
   if (url.port && url.port !== "443") {
-    return {
-      valid: false,
-      error: "Custom ports are not allowed.",
-    };
+    throw new Error("Only HTTPS port 443 is allowed.");
   }
 
-  if (isBlockedHost(url.hostname)) {
-    return {
-      valid: false,
-      error: "Private or local network URLs are not allowed.",
-    };
-  }
-
-  return { valid: true, url };
-}
-
-async function inspectYouTube(body: any): Promise<Response> {
-  const input = body?.url;
-
-  if (typeof input !== "string") {
-    return json(
-      {
-        success: false,
-        error: "YouTube URL is required.",
-      },
-      400
-    );
-  }
-
-  const videoId = getVideoId(input);
+  const host = url.hostname.toLowerCase();
 
   if (
-    !videoId ||
-    !/^[a-zA-Z0-9_-]{11}$/.test(videoId)
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host.endsWith(".local") ||
+    /^\d{1,3}(\.\d{1,3}){3}$/.test(host) ||
+    host.includes(":")
   ) {
-    return json(
-      {
-        success: false,
-        error: "Invalid YouTube video URL.",
-      },
-      400
+    throw new Error("Private or IP-based hosts are not allowed.");
+  }
+
+  const normalized = host.replace(/^www\./, "");
+
+  if (
+    ["youtube.com", "youtu.be", "youtube-nocookie.com"]
+      .some(domain =>
+        normalized === domain ||
+        normalized.endsWith("." + domain)
+      )
+  ) {
+    throw new Error(
+      "YouTube extraction is not supported."
     );
   }
 
-  const canonicalUrl =
-    `https://www.youtube.com/watch?v=${videoId}`;
+  url.hash = "";
+  return url.toString();
+}
+
+async function createDownloadJob(
+  request: Request,
+  env: Env
+) {
+  let body: {
+    url?: unknown;
+    format?: unknown;
+  };
 
   try {
-    const endpoint =
-      "https://www.youtube.com/oembed?format=json&url=" +
-      encodeURIComponent(canonicalUrl);
+    body = await request.json();
+  } catch {
+    return response({
+      success: false,
+      error: "Invalid JSON."
+    }, 400);
+  }
 
-    const response = await fetch(endpoint, {
-      headers: {
-        "User-Agent": "ULTRA-VIDEO-CLIPS/1.0",
-      },
+  let sourceUrl: string;
+
+  try {
+    sourceUrl = validateUrl(body.url);
+  } catch (error) {
+    return response({
+      success: false,
+      error: (error as Error).message
+    }, 400);
+  }
+
+  const format =
+    typeof body.format === "string"
+      ? body.format
+      : "source";
+
+  if (!FORMATS.includes(format)) {
+    return response({
+      success: false,
+      error: "Unsupported format."
+    }, 400);
+  }
+
+  const jobId = crypto.randomUUID();
+  const now = Date.now();
+
+  try {
+    await env.DB.prepare(`
+      INSERT INTO jobs (
+        id,
+        status,
+        source_url,
+        format,
+        created_at,
+        updated_at
+      )
+      VALUES (?, 'QUEUED', ?, ?, ?, ?)
+    `).bind(
+      jobId,
+      sourceUrl,
+      format,
+      now,
+      now
+    ).run();
+
+    await env.MEDIA_QUEUE.send({
+      jobId,
+      sourceUrl,
+      format,
+      createdAt: now
     });
 
-    if (!response.ok) {
-      return json(
-        {
-          success: false,
-          error: "YouTube video information is unavailable.",
-        },
-        404
-      );
+  } catch (error) {
+    console.error(error);
+
+    return response({
+      success: false,
+      error: "Job creation failed."
+    }, 503);
+  }
+
+  return response({
+    success: true,
+    jobId,
+    status: "QUEUED",
+    statusUrl:
+      `${env.PUBLIC_API_BASE}/api/v2/status/${jobId}`
+  }, 202);
+}
+
+async function getStatus(
+  jobId: string,
+  request: Request,
+  env: Env
+) {
+  if (!validId(jobId)) {
+    return response({
+      success: false,
+      error: "Invalid job ID."
+    }, 400);
+  }
+
+  const job = await env.DB.prepare(`
+    SELECT
+      id,
+      status,
+      format,
+      title,
+      file_size AS fileSize,
+      download_url AS downloadUrl,
+      error,
+      created_at AS createdAt,
+      updated_at AS updatedAt
+    FROM jobs
+    WHERE id = ?
+  `).bind(jobId).first<Record<string, unknown>>();
+
+  if (!job) {
+    return response({
+      success: false,
+      error: "Job not found."
+    }, 404);
+  }
+
+  if (job.status === "COMPLETED" && !job.downloadUrl) {
+    job.downloadUrl =
+      `${new URL(request.url).origin}/api/v2/file/${jobId}`;
+  }
+
+  return response({
+    success: true,
+    jobId,
+    ...job
+  });
+}
+
+async function processorCallback(
+  request: Request,
+  env: Env
+) {
+  const secret = request.headers.get(
+    "X-Processor-Secret"
+  );
+
+  if (
+    !env.PROCESSOR_SHARED_SECRET ||
+    secret !== env.PROCESSOR_SHARED_SECRET
+  ) {
+    return response({
+      success: false,
+      error: "Unauthorized."
+    }, 401);
+  }
+
+  let body: {
+    jobId?: string;
+    status?: string;
+    title?: string;
+    fileSize?: number;
+    objectKey?: string;
+    error?: string;
+  };
+
+  try {
+    body = await request.json();
+  } catch {
+    return response({
+      success: false,
+      error: "Invalid JSON."
+    }, 400);
+  }
+
+  const id = body.jobId || "";
+
+  if (!validId(id)) {
+    return response({
+      success: false,
+      error: "Invalid job ID."
+    }, 400);
+  }
+
+  const now = Date.now();
+
+  if (body.status === "PROCESSING") {
+    await env.DB.prepare(`
+      UPDATE jobs
+      SET status = 'PROCESSING', updated_at = ?
+      WHERE id = ?
+    `).bind(now, id).run();
+
+    return response({ success: true });
+  }
+
+  if (body.status === "FAILED") {
+    await env.DB.prepare(`
+      UPDATE jobs
+      SET status = 'FAILED',
+          error = ?,
+          updated_at = ?
+      WHERE id = ?
+    `).bind(
+      (body.error || "Processing failed.").slice(0, 500),
+      now,
+      id
+    ).run();
+
+    return response({ success: true });
+  }
+
+  if (body.status === "COMPLETED") {
+    const objectKey = body.objectKey || "";
+
+    if (!objectKey.startsWith(`jobs/${id}/`)) {
+      return response({
+        success: false,
+        error: "Invalid object key."
+      }, 400);
     }
 
-    const metadata: any = await response.json();
+    const object = await env.MEDIA_BUCKET.head(objectKey);
 
-    return json({
-      success: true,
-      type: "youtube",
-      videoId,
-      title: metadata.title || "Unknown title",
-      author: metadata.author_name || "Unknown creator",
-      thumbnail:
-        `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
-      previewUrl:
-        `https://www.youtube.com/embed/${videoId}`,
-      originalUrl: canonicalUrl,
-      downloadAvailable: false,
-      processingAvailable: false,
-      message:
-        "YouTube preview is available. Media downloading and extraction are not provided.",
-    });
-  } catch {
-    return json(
-      {
+    if (!object) {
+      return response({
         success: false,
-        error: "Unable to connect to YouTube.",
-      },
-      502
-    );
+        error: "R2 object not found."
+      }, 409);
+    }
+
+    const publicUrl = env.PUBLIC_MEDIA_BASE_URL
+      ? `${env.PUBLIC_MEDIA_BASE_URL.replace(/\/+$/, "")}/${objectKey
+          .split("/")
+          .map(encodeURIComponent)
+          .join("/")}`
+      : null;
+
+    await env.DB.prepare(`
+      UPDATE jobs
+      SET status = 'COMPLETED',
+          title = ?,
+          file_size = ?,
+          object_key = ?,
+          download_url = ?,
+          error = NULL,
+          updated_at = ?
+      WHERE id = ?
+    `).bind(
+      (body.title || "Processed video").slice(0, 250),
+      body.fileSize || object.size,
+      objectKey,
+      publicUrl,
+      now,
+      id
+    ).run();
+
+    return response({ success: true });
   }
+
+  return response({
+    success: false,
+    error: "Unknown processor status."
+  }, 400);
 }
 
-function inspectDirectVideo(body: any): Response {
-  const result = validateDirectVideoUrl(body?.url);
+async function downloadFile(
+  jobId: string,
+  env: Env
+) {
+  const job = await env.DB.prepare(`
+    SELECT status, object_key
+    FROM jobs
+    WHERE id = ?
+  `).bind(jobId).first<{
+    status: string;
+    object_key: string | null;
+  }>();
 
-  if (!result.valid) {
-    return json(
-      {
-        success: false,
-        error: result.error,
-      },
-      400
-    );
+  if (
+    !job ||
+    job.status !== "COMPLETED" ||
+    !job.object_key
+  ) {
+    return response({
+      success: false,
+      error: "File is not ready."
+    }, 404);
   }
 
-  return json({
-    success: true,
-    type: "direct_video",
-    originalUrl: result.url.toString(),
-    host: result.url.hostname,
-    urlValidated: true,
-    contentType: "not_checked",
-    downloadAvailable: false,
-    processingAvailable: false,
-    processingMode: "android-local",
-    message:
-      "URL validation completed. The Android app must download the authorized media and inspect it locally before processing.",
+  const object = await env.MEDIA_BUCKET.get(
+    job.object_key
+  );
+
+  if (!object) {
+    return response({
+      success: false,
+      error: "File not found."
+    }, 404);
+  }
+
+  const headers = new Headers(HEADERS);
+
+  object.writeHttpMetadata(headers);
+  headers.set(
+    "Content-Type",
+    object.httpMetadata?.contentType || "video/mp4"
+  );
+  headers.set("Content-Length", String(object.size));
+  headers.set(
+    "Content-Disposition",
+    `attachment; filename="ultra-${jobId}.mp4"`
+  );
+
+  return new Response(object.body, {
+    status: 200,
+    headers
   });
 }
 
-function getCapabilities(): Response {
-  return json({
-    success: true,
-    application: "ULTRA VIDEO CLIPS",
-    version: VERSION,
-    plan: "cloudflare-free",
-    capabilities: {
-      api: true,
-      youtubeMetadata: true,
-      youtubePreview: true,
-      directUrlValidation: true,
-      androidLocalProcessing: true,
-      cloudProcessing: false,
-      cloudFFmpeg: false,
-      videoDownloadFromWorker: false,
-      videoClippingOnWorker: false,
-      audioExtractionOnWorker: false,
-      mp3ConversionOnWorker: false,
-    },
-    processing: {
-      mode: "android-local",
-      requiredComponents: [
-        "Android MediaExtractor",
-        "Android MediaMuxer",
-        "Android MediaCodec",
-      ],
-      message:
-        "Video processing must be implemented inside the Android application. This Worker does not run FFmpeg or process media files.",
-    },
-  });
-}
-
-async function handleRequest(
+async function handle(
   request: Request,
-  _env: Env
+  env: Env
 ): Promise<Response> {
-  const url = new URL(request.url);
-  const path = url.pathname;
-
   if (request.method === "OPTIONS") {
     return new Response(null, {
       status: 204,
-      headers: CORS_HEADERS,
+      headers: HEADERS
     });
   }
 
+  const url = new URL(request.url);
+  const path = url.pathname;
+
   if (request.method === "GET" && path === "/") {
-    return json({
-      success: true,
+    return response({
       name: "ULTRA VIDEO CLIPS API",
-      version: VERSION,
-      status: "online",
+      version: "2.0.0",
+      status: "online"
     });
   }
 
   if (request.method === "GET" && path === "/health") {
-    return json({
+    return response({
       success: true,
-      status: "healthy",
-      version: VERSION,
-      timestamp: new Date().toISOString(),
+      database: true,
+      storage: true,
+      queue: true
     });
   }
 
   if (
-    request.method === "GET" &&
-    path === "/api/processing/capabilities"
+    request.method === "POST" &&
+    path === "/api/v2/download"
   ) {
-    return getCapabilities();
+    return createDownloadJob(request, env);
   }
 
-  if (request.method !== "POST") {
-    return json(
-      {
-        success: false,
-        error: "Method not allowed.",
-      },
-      405
-    );
+  if (
+    request.method === "POST" &&
+    path === "/api/v2/processor/callback"
+  ) {
+    return processorCallback(request, env);
   }
 
-  let body: any;
-
-  try {
-    const contentLength = Number(
-      request.headers.get("content-length") || "0"
-    );
-
-    if (contentLength > 16384) {
-      return json(
-        {
-          success: false,
-          error: "Request body is too large.",
-        },
-        413
-      );
-    }
-
-    const rawBody = await request.text();
-
-    if (rawBody.length > 16384) {
-      return json(
-        {
-          success: false,
-          error: "Request body is too large.",
-        },
-        413
-      );
-    }
-
-    body = JSON.parse(rawBody);
-  } catch {
-    return json(
-      {
-        success: false,
-        error: "Invalid JSON request body.",
-      },
-      400
-    );
-  }
-
-  if (path === "/api/youtube/inspect") {
-    return inspectYouTube(body);
-  }
-
-  if (path === "/api/video/inspect") {
-    return inspectDirectVideo(body);
-  }
-
-  return json(
-    {
-      success: false,
-      error: "API endpoint not found.",
-      path,
-    },
-    404
+  const statusMatch = path.match(
+    /^\/api\/v2\/status\/([a-f0-9-]+)$/i
   );
+
+  if (request.method === "GET" && statusMatch) {
+    return getStatus(statusMatch[1], request, env);
+  }
+
+  const fileMatch = path.match(
+    /^\/api\/v2\/file\/([a-f0-9-]+)$/i
+  );
+
+  if (request.method === "GET" && fileMatch) {
+    if (!validId(fileMatch[1])) {
+      return response({ error: "Invalid ID." }, 400);
+    }
+
+    return downloadFile(fileMatch[1], env);
+  }
+
+  return response({
+    success: false,
+    error: "Route not found."
+  }, 404);
 }
 
 export default {
-  async fetch(
-    request: Request,
-    env: Env
-  ): Promise<Response> {
+  async fetch(request: Request, env: Env) {
     try {
-      return await handleRequest(request, env);
-    } catch {
-      return json(
-        {
-          success: false,
-          error: "Internal server error.",
-        },
-        500
-      );
+      return await handle(request, env);
+    } catch (error) {
+      console.error(error);
+
+      return response({
+        success: false,
+        error: "Internal server error."
+      }, 500);
     }
   },
+
+  async queue(
+    batch: MessageBatch<DownloadJob>,
+    env: Env
+  ) {
+    for (const message of batch.messages) {
+      const job = message.body;
+
+      try {
+        await env.DB.prepare(`
+          UPDATE jobs
+          SET status = 'PROCESSING', updated_at = ?
+          WHERE id = ? AND status = 'QUEUED'
+        `).bind(Date.now(), job.jobId).run();
+
+        const result = await fetch(env.PROCESSOR_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Processor-Secret":
+              env.PROCESSOR_SHARED_SECRET
+          },
+          body: JSON.stringify({
+            jobId: job.jobId,
+            sourceUrl: job.sourceUrl,
+            format: job.format,
+            callbackUrl:
+              `${env.PUBLIC_API_BASE}/api/v2/processor/callback`
+          })
+        });
+
+        if (!result.ok) {
+          throw new Error(
+            `Processor HTTP ${result.status}`
+          );
+        }
+
+        message.ack();
+
+      } catch (error) {
+        console.error("Queue error:", error);
+
+        await env.DB.prepare(`
+          UPDATE jobs
+          SET status = 'FAILED',
+              error = ?,
+              updated_at = ?
+          WHERE id = ?
+        `).bind(
+          String(error).slice(0, 500),
+          Date.now(),
+          job.jobId
+        ).run();
+
+        message.ack();
+      }
+    }
+  }
 };
