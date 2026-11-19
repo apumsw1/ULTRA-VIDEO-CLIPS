@@ -111,9 +111,11 @@ private fun extractYouTubeId(input: String): String? {
             else -> null
         }
 
-        if (id != null &&
+        if (
+            id != null &&
             id.matches(Regex("[A-Za-z0-9_-]{11}"))
         ) id else null
+
     } catch (_: Exception) {
         null
     }
@@ -152,6 +154,7 @@ private fun inspectUrl(input: String): InspectionResult {
         }
 
         val code = connection.responseCode
+
         val stream = if (code in 200..299) {
             connection.inputStream
         } else {
@@ -164,7 +167,8 @@ private fun inspectUrl(input: String): InspectionResult {
 
         val json = JSONObject(response)
 
-        if (code !in 200..299 ||
+        if (
+            code !in 200..299 ||
             !json.optBoolean("success")
         ) {
             InspectionResult(
@@ -187,6 +191,7 @@ private fun inspectUrl(input: String): InspectionResult {
                 )
             )
         }
+
     } catch (e: Exception) {
         InspectionResult(
             success = false,
@@ -219,11 +224,14 @@ private fun isSafeHttpsUrl(input: String): Boolean {
         ) return false
 
         if (
-            host.matches(Regex("^172\\.(1[6-9]|2[0-9]|3[01])\\..*"))
+            host.matches(
+                Regex("^172\\.(1[6-9]|2[0-9]|3[01])\\..*")
+            )
         ) return false
 
         url.userInfo.isNullOrEmpty() &&
             (url.port == -1 || url.port == 443)
+
     } catch (_: Exception) {
         false
     }
@@ -326,6 +334,7 @@ private fun downloadVideo(
             }
 
             return output
+
         } finally {
             connection.disconnect()
         }
@@ -348,6 +357,7 @@ private fun saveToGallery(
         if (!folder.exists()) folder.mkdirs()
 
         val extension = if (audioOnly) "m4a" else "mp4"
+
         val destination = File(
             folder,
             "ULTRA_${System.currentTimeMillis()}.$extension"
@@ -358,6 +368,7 @@ private fun saveToGallery(
     }
 
     val extension = if (audioOnly) "m4a" else "mp4"
+
     val mime = if (audioOnly) {
         "audio/mp4"
     } else {
@@ -404,15 +415,126 @@ private fun saveToGallery(
         context.contentResolver.update(uri, completed, null, null)
 
         return uri.toString()
+
     } catch (e: Exception) {
         context.contentResolver.delete(uri, null, null)
         throw e
     }
 }
 
+/* NEW: DIRECT DOWNLOAD TO GALLERY */
+
+private fun downloadDirectToGallery(
+    context: Context,
+    inputUrl: String
+): String {
+    var currentUrl = inputUrl
+
+    repeat(6) { redirectCount ->
+        if (!isSafeHttpsUrl(currentUrl)) {
+            throw Exception("Invalid or unsafe HTTPS URL.")
+        }
+
+        val connection =
+            URL(currentUrl).openConnection() as HttpURLConnection
+
+        try {
+            connection.instanceFollowRedirects = false
+            connection.connectTimeout = 20000
+            connection.readTimeout = 60000
+
+            connection.setRequestProperty(
+                "User-Agent",
+                "ULTRA-VIDEO-CLIPS-Android"
+            )
+
+            val code = connection.responseCode
+
+            if (code in 300..399) {
+                val location = connection.getHeaderField("Location")
+                    ?: throw Exception("Invalid redirect.")
+
+                if (redirectCount == 5) {
+                    throw Exception("Too many redirects.")
+                }
+
+                currentUrl = URL(URL(currentUrl), location).toString()
+                return@repeat
+            }
+
+            if (code !in 200..299) {
+                throw Exception("Download failed: HTTP $code")
+            }
+
+            val type = connection.contentType
+                ?.substringBefore(";")
+                ?.lowercase() ?: ""
+
+            if (
+                !type.startsWith("video/") &&
+                type != "application/mp4" &&
+                type != "application/octet-stream" &&
+                type != "binary/octet-stream"
+            ) {
+                throw Exception(
+                    "URL does not contain a supported video."
+                )
+            }
+
+            if (connection.contentLengthLong > MAX_DOWNLOAD_BYTES) {
+                throw Exception("Maximum download size is 500 MB.")
+            }
+
+            val tempFile = File(
+                context.cacheDir,
+                "ultra_${UUID.randomUUID()}.mp4"
+            )
+
+            connection.inputStream.use { input ->
+                FileOutputStream(tempFile).use { output ->
+                    val buffer = ByteArray(64 * 1024)
+                    var total = 0L
+
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count == -1) break
+
+                        total += count
+
+                        if (total > MAX_DOWNLOAD_BYTES) {
+                            throw Exception(
+                                "Maximum download size is 500 MB."
+                            )
+                        }
+
+                        output.write(buffer, 0, count)
+                    }
+                }
+            }
+
+            if (tempFile.length() == 0L) {
+                tempFile.delete()
+                throw Exception("Downloaded file is empty.")
+            }
+
+            return try {
+                saveToGallery(context, tempFile, false)
+            } finally {
+                tempFile.delete()
+            }
+
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    throw Exception("Download failed.")
+}
+
 @Composable
 fun UltraVideoClipsApp() {
     val context = LocalContext.current
+
     val mainHandler = remember {
         Handler(Looper.getMainLooper())
     }
@@ -433,7 +555,10 @@ fun UltraVideoClipsApp() {
     }
 
     var busy by remember { mutableStateOf(false) }
-    var status by remember { mutableStateOf("Select a video to begin.") }
+    var status by remember {
+        mutableStateOf("Select a video to begin.")
+    }
+
     var outputLocation by remember { mutableStateOf("") }
 
     val filePicker = rememberLauncherForActivityResult(
@@ -452,7 +577,7 @@ fun UltraVideoClipsApp() {
                     android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
                 )
             } catch (_: Exception) {
-                // Some document providers do not support persistable access.
+                // Persistable permission is not supported by every provider.
             }
         }
     }
@@ -506,6 +631,7 @@ fun UltraVideoClipsApp() {
             val editedItem = editedItemBuilder.build()
 
             val extension = if (audioOnly) "m4a" else "mp4"
+
             val outputFile = File(
                 context.cacheDir,
                 "export_${UUID.randomUUID()}.$extension"
@@ -516,6 +642,7 @@ fun UltraVideoClipsApp() {
             val transformer = Transformer.Builder(context)
                 .addListener(
                     object : Transformer.Listener {
+
                         override fun onCompleted(
                             composition: androidx.media3.transformer.Composition,
                             exportResult: ExportResult
@@ -531,16 +658,20 @@ fun UltraVideoClipsApp() {
                                     mainHandler.post {
                                         busy = false
                                         outputLocation = saved
+
                                         status = if (audioOnly) {
                                             "Audio export completed. Saved as M4A."
                                         } else {
                                             "Video export completed successfully."
                                         }
                                     }
+
                                 } catch (e: Exception) {
                                     mainHandler.post {
                                         busy = false
-                                        status = "Export finished, but saving failed: " +
+
+                                        status =
+                                            "Export finished, but saving failed: " +
                                             (e.localizedMessage ?: "Unknown error")
                                     }
                                 }
@@ -553,6 +684,7 @@ fun UltraVideoClipsApp() {
                             exportException: ExportException
                         ) {
                             busy = false
+
                             status = "Processing failed: " +
                                 (exportException.localizedMessage
                                     ?: "Unsupported media or codec.")
@@ -565,6 +697,7 @@ fun UltraVideoClipsApp() {
                 editedItem,
                 outputFile.absolutePath
             )
+
         } catch (e: Exception) {
             busy = false
             status = e.localizedMessage ?: "Could not start processing."
@@ -728,10 +861,12 @@ fun UltraVideoClipsApp() {
                                     result.title,
                                     color = TextWhite
                                 )
+
                                 Text(
                                     "Channel: ${result.author}",
                                     color = MutedText
                                 )
+
                                 Text(
                                     "YouTube downloading is not supported.",
                                     color = Color(0xFFFFCC66),
@@ -739,12 +874,74 @@ fun UltraVideoClipsApp() {
                                 )
                             } else {
                                 Text(
-                                    "Direct URL validated. It will be downloaded to this phone when processing starts.",
+                                    "Direct URL validated. You can download or process this video.",
                                     color = MutedText,
                                     fontSize = 12.sp
                                 )
                             }
                         }
+                    }
+                }
+
+                /* NEW DOWNLOAD BUTTON */
+
+                if (
+                    inspection?.success == true &&
+                    inspection?.isYouTube == false
+                ) {
+                    Spacer(Modifier.height(12.dp))
+
+                    Button(
+                        onClick = {
+                            if (busy) return@Button
+
+                            val url = sourceUrl.trim()
+
+                            if (!isSafeHttpsUrl(url)) {
+                                status = "Invalid HTTPS video URL."
+                                return@Button
+                            }
+
+                            busy = true
+                            outputLocation = ""
+                            status = "Downloading video to Gallery..."
+
+                            Thread {
+                                try {
+                                    val saved = downloadDirectToGallery(
+                                        context,
+                                        url
+                                    )
+
+                                    mainHandler.post {
+                                        busy = false
+                                        outputLocation = saved
+                                        status =
+                                            "Download completed! Video saved."
+                                    }
+
+                                } catch (e: Exception) {
+                                    mainHandler.post {
+                                        busy = false
+                                        status = e.localizedMessage
+                                            ?: "Download failed."
+                                    }
+                                }
+                            }.start()
+                        },
+                        enabled = !busy,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(54.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF69E6A5),
+                            contentColor = Color.Black
+                        )
+                    ) {
+                        Text(
+                            "DOWNLOAD TO GALLERY",
+                            fontWeight = FontWeight.ExtraBold
+                        )
                     }
                 }
 
@@ -816,14 +1013,16 @@ fun UltraVideoClipsApp() {
                             return@Button
                         }
 
-                        if (currentUri == null &&
+                        if (
+                            currentUri == null &&
                             currentUrl.isBlank()
                         ) {
                             status = "Choose a video or enter a URL."
                             return@Button
                         }
 
-                        if (currentUri == null &&
+                        if (
+                            currentUri == null &&
                             !isSafeHttpsUrl(currentUrl)
                         ) {
                             status = "Invalid HTTPS video URL."
@@ -850,6 +1049,7 @@ fun UltraVideoClipsApp() {
                                             currentMode
                                         )
                                     }
+
                                 } catch (e: Exception) {
                                     mainHandler.post {
                                         busy = false
@@ -876,8 +1076,10 @@ fun UltraVideoClipsApp() {
                             color = Color.Black,
                             strokeWidth = 2.dp
                         )
+
                         Spacer(Modifier.width(10.dp))
                         Text("PROCESSING...")
+
                     } else {
                         Text(
                             "START PROCESSING",
@@ -911,10 +1113,12 @@ fun UltraVideoClipsApp() {
 
                         if (busy) {
                             Spacer(Modifier.height(12.dp))
+
                             LinearProgressIndicator(
                                 modifier = Modifier.fillMaxWidth(),
                                 color = AccentCyan
                             )
+
                             Text(
                                 "Processing is running on this device.",
                                 color = MutedText,
@@ -925,11 +1129,13 @@ fun UltraVideoClipsApp() {
 
                         if (outputLocation.isNotBlank()) {
                             Spacer(Modifier.height(12.dp))
+
                             Text(
                                 "OUTPUT SAVED",
                                 color = Color(0xFF69E6A5),
                                 fontWeight = FontWeight.Bold
                             )
+
                             Text(
                                 outputLocation,
                                 color = MutedText,
