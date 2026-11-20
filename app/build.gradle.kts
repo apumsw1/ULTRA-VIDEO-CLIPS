@@ -13,8 +13,8 @@ android {
         minSdk = 24
         targetSdk = 35
 
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 3
+        versionName = "1.2"
     }
 
     buildFeatures {
@@ -45,6 +45,9 @@ dependencies {
     // Android local video processing engine
     implementation("androidx.media3:media3-common:1.5.1")
     implementation("androidx.media3:media3-transformer:1.5.1")
+
+    // FFmpeg engine for real MP3 and media conversion
+    implementation("dev.ffmpegkit-maintained:ffmpeg-kit-full:8.1.9")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
